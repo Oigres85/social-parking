@@ -58,6 +58,15 @@ export default function Home() {
   const parkingsQuery = useMemoFirebase(() => (firestore && user) ? collection(firestore, "parkings") : null, [firestore, user]);
   const { data: parkingsData } = useCollection(parkingsQuery);
 
+  const mapParkingSpots = useMemo(() => {
+    if (isSearching && parkingsData) {
+      return parkingsData
+        .filter((p) => p.status === "libero")
+        .map((p) => ({ id: p.id, lat: p.latitude, lng: p.longitude }));
+    }
+    return [];
+  }, [isSearching, parkingsData]);
+
   useEffect(() => {
     if (!isUserLoading && !user) {
       router.push('/login');
@@ -259,6 +268,12 @@ export default function Home() {
     }
   };
 
+  const handleLogout = async () => {
+    const auth = getAuth();
+    await signOut(auth);
+    router.push('/login');
+  };
+
   if (isUserLoading || !user) {
     return (
        <main className="flex h-screen w-full flex-col items-center justify-center bg-background text-center p-4">
@@ -288,22 +303,6 @@ export default function Home() {
     );
   }
   
-  const handleLogout = async () => {
-    const auth = getAuth();
-    await signOut(auth);
-    router.push('/login');
-  };
-
-  const mapParkingSpots = useMemo(() => {
-    if (isSearching && parkingsData) {
-      return parkingsData
-        .filter((p) => p.status === "libero")
-        .map((p) => ({ id: p.id, lat: p.latitude, lng: p.longitude }));
-    }
-    return [];
-  }, [isSearching, parkingsData]);
-
-
   return (
     <main className="relative h-screen w-screen overflow-hidden">
       <Map 
