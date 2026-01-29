@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  env: {
+    NEXT_PUBLIC_MAPBOX_TOKEN: 'pk.eyJ1Ijoic2VyZ2FyIiwiYSI6ImNta3h5ZjgxZTAxbTIzZXNiZmphZXdldHUifQ.9oKVbXaLNPYGp__1QwVoRQ',
+  },
 };
 
 export default nextConfig;
