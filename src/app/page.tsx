@@ -55,7 +55,7 @@ export default function Home() {
   const notifiedParkingIds = useRef(new Set<string>());
   const { toast } = useToast();
 
-  const parkingsQuery = useMemoFirebase(() => firestore ? collection(firestore, "parkings") : null, [firestore]);
+  const parkingsQuery = useMemoFirebase(() => (firestore && user) ? collection(firestore, "parkings") : null, [firestore, user]);
   const { data: parkingsData } = useCollection(parkingsQuery);
 
   useEffect(() => {
