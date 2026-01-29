@@ -6,10 +6,11 @@ import { ParkingCircle, MapPin } from "lucide-react";
 
 type MapProps = {
   center?: { lat: number; lng: number };
-  parkingSpots?: { lat: number; lng: number }[];
+  parkingSpots?: { id: string; lat: number; lng: number }[];
+  onParkingSpotClick?: (spot: { lat: number; lng: number }) => void;
 };
 
-export default function MapComponent({ center, parkingSpots = [] }: MapProps) {
+export default function MapComponent({ center, parkingSpots = [], onParkingSpotClick }: MapProps) {
   const accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   
   const [viewState, setViewState] = useState({
@@ -56,9 +57,16 @@ export default function MapComponent({ center, parkingSpots = [] }: MapProps) {
             </div>
         </Marker>
       )}
-      {parkingSpots.map((spot, index) => (
-         <Marker key={index} longitude={spot.lng} latitude={spot.lat} anchor="bottom">
-            <ParkingCircle className="text-primary w-8 h-8" fill="hsl(var(--card))" />
+      {parkingSpots.map((spot) => (
+         <Marker key={spot.id} longitude={spot.lng} latitude={spot.lat} anchor="bottom">
+            <button
+              onClick={() => onParkingSpotClick?.(spot)}
+              className="transform transition-transform hover:scale-110 focus:outline-none"
+              title="Ottieni indicazioni"
+              aria-label="Ottieni indicazioni per il parcheggio"
+            >
+              <ParkingCircle className="text-primary w-8 h-8" fill="hsl(var(--card))" />
+            </button>
         </Marker>
       ))}
     </Map>

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LoaderCircle, ParkingCircle, Search, LogOut, Bell } from "lucide-react";
+import { LoaderCircle, ParkingCircle, Search, LogOut, Bell, Navigation } from "lucide-react";
 import Map from "@/components/Map";
 import { haversineDistance } from "@/lib/utils";
 import { useUser, useFirestore, useCollection, useMemoFirebase, updateDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase";
@@ -186,6 +186,19 @@ export default function Home() {
     };
   }, []);
 
+  const handleParkingSpotClick = (spot: { lat: number; lng: number }) => {
+    if (position) {
+      const url = `https://www.google.com/maps/dir/?api=1&origin=${position.lat},${position.lng}&destination=${spot.lat},${spot.lng}&travelmode=driving`;
+      window.open(url, "_blank");
+    } else {
+      toast({
+        title: "Posizione non disponibile",
+        description: "Impossibile calcolare le indicazioni senza la tua posizione attuale.",
+        variant: "destructive",
+      });
+    }
+  };
+
   useEffect(() => {
     if (isSearching && parkingsData && position) {
       parkingsData.forEach((p) => {
@@ -198,8 +211,9 @@ export default function Home() {
               title: "Parcheggio Libero nelle Vicinanze!",
               description: `Un posto si è liberato a ${distance.toFixed(0)} metri da te.`,
               action: (
-                <Button onClick={() => setPosition({ ...position, lat: p.latitude, lng: p.longitude })}>
-                  Mostra sulla mappa
+                <Button onClick={() => handleParkingSpotClick(parkingLocation)}>
+                  <Navigation className="mr-2 h-4 w-4" />
+                  Indicazioni
                 </Button>
               )
             });
@@ -210,10 +224,22 @@ export default function Home() {
     }
   }, [isSearching, parkingsData, position, toast]);
 
-  const handleSearchingChange = (checked: boolean) => {
+  const handleSearchingChange = async (checked: boolean) => {
     setIsSearching(checked);
     if (userDocRef) {
       updateDocumentNonBlocking(userDocRef, { isSearching: checked });
+    }
+    if (checked && 'Notification' in window) {
+      if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        const permission = await Notification.requestPermission();
+        if (permission === 'denied') {
+          toast({
+            title: "Notifiche disattivate",
+            description: "Non riceverai notifiche per i parcheggi liberi.",
+            variant: "destructive",
+          });
+        }
+      }
     }
   }
 
@@ -268,16 +294,27 @@ export default function Home() {
     router.push('/login');
   };
 
+  const mapParkingSpots = useMemo(() => {
+    if (isSearching && parkingsData) {
+      return parkingsData
+        .filter((p) => p.status === "libero")
+        .map((p) => ({ id: p.id, lat: p.latitude, lng: p.longitude }));
+    }
+    return [];
+  }, [isSearching, parkingsData]);
+
+
   return (
     <main className="relative h-screen w-screen overflow-hidden">
       <Map 
         center={position ? { lat: position.lat, lng: position.lng } : undefined} 
-        parkingSpots={parkingsData?.filter(p => p.status === 'libero').map(p => ({lat: p.latitude, lng: p.longitude}))}
+        parkingSpots={mapParkingSpots}
+        onParkingSpotClick={handleParkingSpotClick}
       />
-      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-96 flex flex-col gap-4">
+      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-80 flex flex-col gap-4">
         <Card className="bg-card/80 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
+          <CardHeader className="p-4">
+            <CardTitle className="flex items-center justify-between text-xl">
               <span>Stato Attuale</span>
               <div className="flex items-center gap-2">
                 {renderStatusIcon()}
@@ -287,13 +324,13 @@ export default function Home() {
               </div>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-primary">{status}</p>
+          <CardContent className="p-4 pt-0">
+            <p className="text-xl font-bold text-primary">{status}</p>
             {status === "Errore" && (
               <p className="mt-2 text-sm text-destructive">{errorMessage}</p>
             )}
             {position && (
-              <div className="mt-4 text-xs text-muted-foreground space-y-1">
+              <div className="mt-2 text-xs text-muted-foreground space-y-1">
                 <p>Velocità: {position.speed ? `${(position.speed * 3.6).toFixed(1)} km/h` : "N/D"}</p>
                 <p>Lat: {position.lat.toFixed(6)}, Lng: {position.lng.toFixed(6)}</p>
               </div>
@@ -301,15 +338,15 @@ export default function Home() {
           </CardContent>
         </Card>
         <Card className="bg-card/80 backdrop-blur-sm">
-           <CardHeader>
-             <CardTitle className="flex items-center justify-between">
+           <CardHeader className="p-4">
+             <CardTitle className="flex items-center justify-between text-xl">
               <div className="flex items-center gap-2">
                 <Bell className="text-primary"/>
                 <span>Modalità Ricerca</span>
               </div>
             </CardTitle>
            </CardHeader>
-           <CardContent>
+           <CardContent className="p-4 pt-0">
               <div className="flex items-center space-x-2">
                 <Switch id="searching-mode" checked={isSearching} onCheckedChange={handleSearchingChange} />
                 <Label htmlFor="searching-mode">Sto cercando parcheggio</Label>
