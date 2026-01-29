@@ -1,0 +1,132 @@
+/**
+ * @file firestore.rules
+ * @description Firestore Security Rules for a parking finder application.
+ *
+ * @section Core Philosophy
+ * This ruleset enforces a strict security model based on user ownership and data segregation.
+ * User-specific information is private and accessible only to the owner. Shared data, like parking spots,
+ * is publicly readable to facilitate the app's core functionality, but write operations are restricted
+ * to the data's original creator.
+ *
+ * @section Data Structure
+ * - /users/{userId}: Private user profile data. Each user can only access their own document.
+ * - /parkings/{parkingId}: Publicly readable parking spot data. Contains a denormalized 'userId' field for ownership checks.
+ * - /users/{userId}/notifications/{notificationId}: A private subcollection containing notifications for a specific user.
+ *
+ * @section Key Security Decisions
+ * - User Enumeration is Disabled: The `/users` collection cannot be listed, protecting user privacy.
+ * - Public Reads for Parking: The `/parkings` collection is readable by any authenticated user to allow for map views and searches.
+ * - Strict Ownership for Writes: All write operations (create, update, delete) are strictly controlled. Users can only modify data they have created.
+ *
+ * @section Denormalization for Authorization
+ * The `/parkings/{parkingId}` documents contain a denormalized `userId` field. This is a critical design choice
+ * that allows security rules to instantly verify ownership for update/delete operations without performing
+ * costly and slow `get()` calls to other collections.
+ *
+ * @section Structural Segregation
+ * User-private data (profiles, notifications) is stored within a path specific to that user (`/users/{userId}/...`),
+ * while public data (`/parkings`) is in a separate top-level collection. This separation simplifies rules and
+ * makes queries for public data more secure and efficient.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------------
+    // Helper Functions
+    // -------------------------------------------------------------------------
+
+    /**
+     * Checks if the user is authenticated.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * Checks if the currently authenticated user's UID matches the provided userId.
+     * This is the primary function for verifying ownership.
+     */
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    /**
+     * Checks for ownership on an existing document. Used for update and delete.
+     * Ensures the request is not attempting to modify a non-existent resource.
+     */
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * Validates that the user's ID within the new document data matches their auth UID.
+     * Essential for ensuring users create documents linked to themselves.
+     */
+    function isCreatingOwnDocument(data, key) {
+      return data[key] == request.auth.uid;
+    }
+    
+    /**
+     * Ensures a critical, immutable field (like an owner ID) is not changed during an update.
+     */
+    function isFieldImmutable(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+
+    /**
+     * @description Manages user profile documents. Each user has exclusive control over their own document.
+     * @path /users/{userId}
+     * @allow (create) An authenticated user can create their own profile document.
+     * @allow (get, update, delete) An authenticated user can read, update, or delete their own profile.
+     * @deny (list) No user can list all documents in the `/users` collection.
+     * @deny (get) User 'user-abc' cannot read the profile of 'user-xyz'.
+     * @principle Restricts access to a user's own data tree.
+     */
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && isCreatingOwnDocument(request.resource.data, 'id');
+      allow update: if isExistingOwner(userId) && isFieldImmutable('id');
+      allow delete: if isExistingOwner(userId);
+
+      /**
+       * @description Manages private notifications for a specific user.
+       * @path /users/{userId}/notifications/{notificationId}
+       * @allow (get, list, update, delete) An authenticated user can manage their own notifications.
+       * @allow (create) An operation (e.g., a backend function) can create a notification for a user, as long as the user ID in the path matches the user ID in the document.
+       * @deny (get) User 'user-abc' cannot read notifications for 'user-xyz'.
+       * @principle Enforces path-based ownership for subcollections.
+       */
+      match /notifications/{notificationId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isCreatingOwnDocument(request.resource.data, 'userId');
+        allow update: if isExistingOwner(userId) && isFieldImmutable('userId');
+        allow delete: if isExistingOwner(userId);
+      }
+    }
+
+    /**
+     * @description Manages parking spot documents, which are publicly readable but have restricted writes.
+     * @path /parkings/{parkingId}
+     * @allow (get, list) Any signed-in user can read or list parking spots to see them on a map.
+     * @allow (create) A signed-in user can create a new parking spot, but they must set the 'userId' field to their own UID.
+     * @allow (update, delete) The user who originally created the parking spot can update or delete it.
+     * @deny (update) User 'user-abc' cannot update a parking spot created by 'user-xyz'.
+     * @deny (create) A user cannot create a parking spot on behalf of another user.
+     * @principle Implements a "Public Read, Owner-Only Write" access pattern using a denormalized 'userId' field.
+     */
+    match /parkings/{parkingId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isCreatingOwnDocument(request.resource.data, 'userId');
+      allow update: if resource != null && isOwner(resource.data.userId) && isFieldImmutable('userId');
+      allow delete: if resource != null && isOwner(resource.data.userId);
+    }
+  }
+}
