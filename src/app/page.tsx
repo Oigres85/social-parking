@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LoaderCircle, ParkingCircle } from "lucide-react";
+import { LoaderCircle, ParkingCircle, Search, LogOut, Bell } from "lucide-react";
 import Map from "@/components/Map";
 import { haversineDistance } from "@/lib/utils";
-import { db } from "@/lib/firebase";
-import { addDoc, collection, GeoPoint, serverTimestamp } from "firebase/firestore";
+import { useUser, useFirestore, useCollection, useMemoFirebase, updateDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase";
+import { collection, serverTimestamp, query, where, getDocs, doc, setDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import ParkingSymbol from "@/components/icons/ParkingSymbol";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { getAuth, signOut } from "firebase/auth";
 
 type Position = {
   lat: number;
@@ -31,40 +35,52 @@ const SPEED_THRESHOLD_KMH = 10; // km/h
 const SPEED_THRESHOLD_MS = SPEED_THRESHOLD_KMH / 3.6; // m/s
 const STOP_DURATION_MS = 60 * 1000; // 60 seconds
 const DISTANCE_THRESHOLD_M = 50; // meters
+const NOTIFICATION_RADIUS_M = 1000; // 1 km
 
 export default function Home() {
+  const { user, isUserLoading } = useUser();
+  const firestore = useFirestore();
+  const router = useRouter();
+
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [status, setStatus] = useState<Status>("Inattivo");
   const [position, setPosition] = useState<Position | null>(null);
   const [parkingSpot, setParkingSpot] = useState<{ lat: number; lng: number } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
   const stopTimer = useRef<NodeJS.Timeout | null>(null);
   const watcherId = useRef<number | null>(null);
   const spotSaved = useRef(false);
+  const notifiedParkingIds = useRef(new Set<string>());
   const { toast } = useToast();
 
-  const saveParkingToFirestore = useCallback(async (lat: number, lng: number) => {
-    if (!db) {
-      console.error("Firebase non è inizializzato.");
-      toast({
-        title: "Errore di configurazione",
-        description: "Firebase non è correttamente configurato. Controlla le variabili d'ambiente.",
-        variant: "destructive",
-      });
-      return;
+  const parkingsQuery = useMemoFirebase(() => firestore ? collection(firestore, "parkings") : null, [firestore]);
+  const { data: parkingsData } = useCollection(parkingsQuery);
+
+  useEffect(() => {
+    if (!isUserLoading && !user) {
+      router.push('/login');
     }
+  }, [user, isUserLoading, router]);
+
+  const userDocRef = useMemo(() => (firestore && user) ? doc(firestore, 'users', user.uid) : null, [firestore, user]);
+
+  const saveParkingToFirestore = useCallback(async (lat: number, lng: number) => {
+    if (!firestore || !user) return;
     try {
-      await addDoc(collection(db, "parkings"), {
-        location: new GeoPoint(lat, lng),
+      addDocumentNonBlocking(collection(firestore, "parkings"), {
+        latitude: lat,
+        longitude: lng,
         timestamp: serverTimestamp(),
         status: "libero",
+        userId: user.uid,
       });
       setStatus("Parcheggio salvato");
       spotSaved.current = true;
       toast({
-        title: "Parcheggio Salvato!",
-        description: "La tua posizione di parcheggio è stata condivisa.",
+        title: "Parcheggio Liberato!",
+        description: "La tua posizione di parcheggio è stata condivisa con gli utenti vicini.",
       });
     } catch (error) {
       console.error("Errore nel salvataggio del parcheggio:", error);
@@ -76,7 +92,7 @@ export default function Home() {
         variant: "destructive",
       });
     }
-  }, [toast]);
+  }, [firestore, user, toast]);
 
   const handlePositionUpdate = useCallback((pos: GeolocationPosition) => {
     const newPosition: Position = {
@@ -87,25 +103,25 @@ export default function Home() {
     };
     setPosition(newPosition);
 
+    if (userDocRef) {
+      updateDocumentNonBlocking(userDocRef, { latitude: newPosition.lat, longitude: newPosition.lng });
+    }
+
     const currentSpeed = newPosition.speed ?? 0;
 
-    // Logic when a parking spot has been set
     if (parkingSpot) {
       if (currentSpeed > SPEED_THRESHOLD_MS) {
-        // User started moving again, reset everything
-        setParkingSpot(null);
-        spotSaved.current = false;
-        setStatus("In movimento");
-      } else {
         const distance = haversineDistance(parkingSpot, newPosition);
         if (distance > DISTANCE_THRESHOLD_M && !spotSaved.current) {
           saveParkingToFirestore(parkingSpot.lat, parkingSpot.lng);
         }
+        setParkingSpot(null);
+        spotSaved.current = false;
+        setStatus("In movimento");
       }
       return;
     }
 
-    // Logic to detect parking
     if (currentSpeed < SPEED_THRESHOLD_MS) {
       if (!stopTimer.current) {
         setStatus("Rilevando sosta...");
@@ -122,8 +138,8 @@ export default function Home() {
       }
       setStatus("In movimento");
     }
-  }, [parkingSpot, saveParkingToFirestore]);
-
+  }, [parkingSpot, saveParkingToFirestore, userDocRef]);
+  
   const handlePositionError = (error: GeolocationPositionError) => {
     let message = "Si è verificato un errore sconosciuto.";
     switch (error.code) {
@@ -170,6 +186,37 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (isSearching && parkingsData && position) {
+      parkingsData.forEach((p) => {
+        if (p.status === "libero" && !notifiedParkingIds.current.has(p.id)) {
+          const parkingLocation = { lat: p.latitude, lng: p.longitude };
+          const distance = haversineDistance({ lat: position.lat, lng: position.lng }, parkingLocation);
+          
+          if (distance <= NOTIFICATION_RADIUS_M) {
+            toast({
+              title: "Parcheggio Libero nelle Vicinanze!",
+              description: `Un posto si è liberato a ${distance.toFixed(0)} metri da te.`,
+              action: (
+                <Button onClick={() => setPosition({ ...position, lat: p.latitude, lng: p.longitude })}>
+                  Mostra sulla mappa
+                </Button>
+              )
+            });
+            notifiedParkingIds.current.add(p.id);
+          }
+        }
+      });
+    }
+  }, [isSearching, parkingsData, position, toast]);
+
+  const handleSearchingChange = (checked: boolean) => {
+    setIsSearching(checked);
+    if (userDocRef) {
+      updateDocumentNonBlocking(userDocRef, { isSearching: checked });
+    }
+  }
+
   const renderStatusIcon = () => {
     switch (status) {
       case "Richiesta permessi...":
@@ -178,10 +225,22 @@ export default function Home() {
       case "Parcheggiato":
       case "Parcheggio salvato":
         return <ParkingCircle className="text-primary" />;
+      case "In movimento":
+        if (isSearching) return <Search className="text-primary" />;
+        return null;
       default:
         return null;
     }
   };
+
+  if (isUserLoading || !user) {
+    return (
+       <main className="flex h-screen w-full flex-col items-center justify-center bg-background text-center p-4">
+        <LoaderCircle className="w-12 h-12 animate-spin text-primary" />
+        <p className="mt-4 text-muted-foreground">Caricamento...</p>
+      </main>
+    )
+  }
 
   if (!isMonitoring) {
     return (
@@ -202,16 +261,30 @@ export default function Home() {
       </main>
     );
   }
+  
+  const handleLogout = async () => {
+    const auth = getAuth();
+    await signOut(auth);
+    router.push('/login');
+  };
 
   return (
     <main className="relative h-screen w-screen overflow-hidden">
-      <Map center={position ? { lat: position.lat, lng: position.lng } : undefined} />
-      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-80">
+      <Map 
+        center={position ? { lat: position.lat, lng: position.lng } : undefined} 
+        parkingSpots={parkingsData?.filter(p => p.status === 'libero').map(p => ({lat: p.latitude, lng: p.longitude}))}
+      />
+      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-96 flex flex-col gap-4">
         <Card className="bg-card/80 backdrop-blur-sm">
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>Stato Attuale</span>
-              {renderStatusIcon()}
+              <div className="flex items-center gap-2">
+                {renderStatusIcon()}
+                <Button variant="ghost" size="icon" onClick={handleLogout} title="Esci">
+                  <LogOut className="w-5 h-5 text-muted-foreground"/>
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -226,6 +299,25 @@ export default function Home() {
               </div>
             )}
           </CardContent>
+        </Card>
+        <Card className="bg-card/80 backdrop-blur-sm">
+           <CardHeader>
+             <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bell className="text-primary"/>
+                <span>Modalità Ricerca</span>
+              </div>
+            </CardTitle>
+           </CardHeader>
+           <CardContent>
+              <div className="flex items-center space-x-2">
+                <Switch id="searching-mode" checked={isSearching} onCheckedChange={handleSearchingChange} />
+                <Label htmlFor="searching-mode">Sto cercando parcheggio</Label>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Attiva questa opzione per ricevere notifiche quando un parcheggio si libera vicino a te.
+              </p>
+           </CardContent>
         </Card>
       </div>
     </main>

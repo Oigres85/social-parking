@@ -67,6 +67,10 @@
         "longitude": {
           "type": "number",
           "description": "Longitude of the user's current location."
+        },
+        "isSearching": {
+            "type": "boolean",
+            "description": "Indicates whether the user is currently looking for a parking spot."
         }
       },
       "required": [
@@ -74,52 +78,11 @@
         "email",
         "name"
       ]
-    },
-    "Notification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "Notification",
-      "type": "object",
-      "description": "Represents a notification sent to a user.",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique identifier for the notification."
-        },
-        "userId": {
-          "type": "string",
-          "description": "Reference to the User who will receive the notification. (Relationship: User 1:N Notification)"
-        },
-        "parkingId": {
-          "type": "string",
-          "description": "Reference to the Parking that triggered the notification. (Relationship: Parking 1:N Notification)"
-        },
-        "message": {
-          "type": "string",
-          "description": "The content of the notification."
-        },
-        "timestamp": {
-          "type": "string",
-          "description": "Timestamp when the notification was sent.",
-          "format": "date-time"
-        },
-        "isRead": {
-          "type": "boolean",
-          "description": "Indicates whether the notification has been read by the user."
-        }
-      },
-      "required": [
-        "id",
-        "userId",
-        "parkingId",
-        "message",
-        "timestamp"
-      ]
     }
   },
   "auth": {
     "providers": [
-      "password",
-      "anonymous"
+      "password"
     ]
   },
   "firestore": {
@@ -155,28 +118,8 @@
             }
           ]
         }
-      },
-      {
-        "path": "/users/{userId}/notifications/{notificationId}",
-        "definition": {
-          "entityName": "Notification",
-          "schema": {
-            "$ref": "#/backend/entities/Notification"
-          },
-          "description": "Stores notifications for each user. Path-based ownership: only the user with the matching userId can read/write their own notifications.",
-          "params": [
-            {
-              "name": "userId",
-              "description": "The unique identifier for the user."
-            },
-            {
-              "name": "notificationId",
-              "description": "The unique identifier for the notification."
-            }
-          ]
-        }
       }
     ],
-    "reasoning": "The Firestore structure prioritizes real-time location data for parking spot availability and user notifications. The core design implements Authorization Independence through path-based ownership for user data and denormalization of the userId into the parkings collection. This eliminates the need for `get()` calls in security rules to validate the parking's owner and enables atomic operations. The structure also enables secure list operations through structural segregation.\n\nSpecifically, each user's data (location) is stored under `/users/{userId}`. Parkings are stored in the `/parkings` collection, which includes the denormalized `userId` field, this permits listing of all parking spots while enabling fine-grained control over creation/updates using security rules based on `request.auth.uid` matching the `userId` field.\nNotifications are stored under `/users/{userId}/notifications/{notificationId}`, ensuring that only the intended recipient can access them.\n\nThis structure supports the required features:\n\n*   **Real-time GPS Monitoring and Parking Status Logic**: The `/parkings` collection stores the parking spot locations, updated in real-time. The `status` field reflects the parking status (e.g., 'libero').\n*   **User Location Data**: The `/users/{userId}` collection stores each user's current location.\n*   **Proximity Notifications**: When a parking spot becomes available, a notification is created under `/users/{userId}/notifications/{notificationId}` for nearby users who are searching for parking.\n*   **PWA Optimization**: N/A, this is frontend related."
+    "reasoning": "The Firestore structure prioritizes real-time location data for parking spot availability and user notifications. The core design implements Authorization Independence through path-based ownership for user data and denormalization of the userId into the parkings collection. This eliminates the need for `get()` calls in security rules to validate the parking's owner and enables atomic operations. The structure also enables secure list operations through structural segregation.\n\nSpecifically, each user's data (location and searching status) is stored under `/users/{userId}`. Parkings are stored in the `/parkings` collection, which includes the denormalized `userId` field, this permits listing of all parking spots while enabling fine-grained control over creation/updates using security rules based on `request.auth.uid` matching the `userId` field.\n\nThis structure supports the required features:\n\n*   **Real-time GPS Monitoring and Parking Status Logic**: The `/parkings` collection stores the parking spot locations, updated in real-time. The `status` field reflects the parking status (e.g., 'libero').\n*   **User Location Data**: The `/users/{userId}` collection stores each user's current location and searching status.\n*   **Proximity Notifications**: When a parking spot becomes available, users who are searching nearby will be notified by listening to the `/parkings` collection and filtering on the client-side."
   }
 }

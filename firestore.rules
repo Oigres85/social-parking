@@ -11,7 +11,6 @@
  * @section Data Structure
  * - /users/{userId}: Private user profile data. Each user can only access their own document.
  * - /parkings/{parkingId}: Publicly readable parking spot data. Contains a denormalized 'userId' field for ownership checks.
- * - /users/{userId}/notifications/{notificationId}: A private subcollection containing notifications for a specific user.
  *
  * @section Key Security Decisions
  * - User Enumeration is Disabled: The `/users` collection cannot be listed, protecting user privacy.
@@ -24,7 +23,7 @@
  * costly and slow `get()` calls to other collections.
  *
  * @section Structural Segregation
- * User-private data (profiles, notifications) is stored within a path specific to that user (`/users/{userId}/...`),
+ * User-private data (profiles) is stored within a path specific to that user (`/users/{userId}/...`),
  * while public data (`/parkings`) is in a separate top-level collection. This separation simplifies rules and
  * makes queries for public data more secure and efficient.
  */
@@ -93,22 +92,6 @@ service cloud.firestore {
       allow create: if isOwner(userId) && isCreatingOwnDocument(request.resource.data, 'id');
       allow update: if isExistingOwner(userId) && isFieldImmutable('id');
       allow delete: if isExistingOwner(userId);
-
-      /**
-       * @description Manages private notifications for a specific user.
-       * @path /users/{userId}/notifications/{notificationId}
-       * @allow (get, list, update, delete) An authenticated user can manage their own notifications.
-       * @allow (create) An operation (e.g., a backend function) can create a notification for a user, as long as the user ID in the path matches the user ID in the document.
-       * @deny (get) User 'user-abc' cannot read notifications for 'user-xyz'.
-       * @principle Enforces path-based ownership for subcollections.
-       */
-      match /notifications/{notificationId} {
-        allow get: if isOwner(userId);
-        allow list: if isOwner(userId);
-        allow create: if isOwner(userId) && isCreatingOwnDocument(request.resource.data, 'userId');
-        allow update: if isExistingOwner(userId) && isFieldImmutable('userId');
-        allow delete: if isExistingOwner(userId);
-      }
     }
 
     /**
