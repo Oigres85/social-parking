@@ -4,11 +4,11 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LoaderCircle, ParkingCircle, Search, LogOut, Bell, Navigation } from "lucide-react";
+import { LoaderCircle, ParkingCircle, Search, LogOut, Bell, Navigation, ChevronUp, ChevronDown } from "lucide-react";
 import Map from "@/components/Map";
 import { haversineDistance } from "@/lib/utils";
 import { useUser, useFirestore, useCollection, useMemoFirebase, updateDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase";
-import { collection, serverTimestamp, query, where, getDocs, doc, setDoc } from "firebase/firestore";
+import { collection, serverTimestamp, doc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import ParkingSymbol from "@/components/icons/ParkingSymbol";
 import { Switch } from "@/components/ui/switch";
@@ -48,13 +48,16 @@ export default function Home() {
   const [parkingSpot, setParkingSpot] = useState<{ lat: number; lng: number } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [isPanelVisible, setIsPanelVisible] = useState(true);
 
   const stopTimer = useRef<NodeJS.Timeout | null>(null);
   const watcherId = useRef<number | null>(null);
   const spotSaved = useRef(false);
   const notifiedParkingIds = useRef(new Set<string>());
   const { toast } = useToast();
-
+  
+  const userDocRef = useMemo(() => (firestore && user) ? doc(firestore, 'users', user.uid) : null, [firestore, user]);
+  
   const parkingsQuery = useMemoFirebase(() => (firestore && user) ? collection(firestore, "parkings") : null, [firestore, user]);
   const { data: parkingsData } = useCollection(parkingsQuery);
 
@@ -66,6 +69,12 @@ export default function Home() {
     }
     return [];
   }, [isSearching, parkingsData]);
+  
+  const handleLogout = async () => {
+    const auth = getAuth();
+    await signOut(auth);
+    router.push('/login');
+  };
 
   useEffect(() => {
     if (!isUserLoading && !user) {
@@ -73,7 +82,6 @@ export default function Home() {
     }
   }, [user, isUserLoading, router]);
 
-  const userDocRef = useMemo(() => (firestore && user) ? doc(firestore, 'users', user.uid) : null, [firestore, user]);
 
   const saveParkingToFirestore = useCallback(async (lat: number, lng: number) => {
     if (!firestore || !user) return;
@@ -231,47 +239,39 @@ export default function Home() {
         }
       });
     }
-  }, [isSearching, parkingsData, position, toast]);
+  }, [isSearching, parkingsData, position, toast, handleParkingSpotClick]);
 
   const handleSearchingChange = async (checked: boolean) => {
     setIsSearching(checked);
     if (userDocRef) {
       updateDocumentNonBlocking(userDocRef, { isSearching: checked });
     }
-    if (checked && 'Notification' in window) {
-      if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-        const permission = await Notification.requestPermission();
-        if (permission === 'denied') {
-          toast({
-            title: "Notifiche disattivate",
-            description: "Non riceverai notifiche per i parcheggi liberi.",
-            variant: "destructive",
-          });
-        }
+    if (checked) {
+      toast({
+        title: "Notifiche parcheggi liberi attivate",
+      });
+      if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        await Notification.requestPermission();
       }
+    } else {
+      toast({
+        title: "Non riceverai notifiche per i parcheggi liberi.",
+      });
     }
   }
 
   const renderStatusIcon = () => {
-    switch (status) {
-      case "Richiesta permessi...":
-      case "Rilevando sosta...":
+    const isParked = status === "Parcheggiato" || status === "Parcheggio salvato";
+    
+    if (status === "Richiesta permessi..." || status === "Rilevando sosta...") {
         return <LoaderCircle className="animate-spin text-primary" />;
-      case "Parcheggiato":
-      case "Parcheggio salvato":
-        return <ParkingCircle className="text-primary" />;
-      case "In movimento":
-        if (isSearching) return <Search className="text-primary" />;
-        return null;
-      default:
-        return null;
     }
-  };
-
-  const handleLogout = async () => {
-    const auth = getAuth();
-    await signOut(auth);
-    router.push('/login');
+    
+    if (status === "In movimento" && isSearching) {
+        return <Search className="text-primary" />;
+    }
+    
+    return <ParkingCircle className={isParked ? "text-primary" : "text-destructive"} />;
   };
 
   if (isUserLoading || !user) {
@@ -310,51 +310,59 @@ export default function Home() {
         parkingSpots={mapParkingSpots}
         onParkingSpotClick={handleParkingSpotClick}
       />
-      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-80 flex flex-col gap-4">
-        <Card className="bg-card/80 backdrop-blur-sm">
-          <CardHeader className="p-4">
-            <CardTitle className="flex items-center justify-between text-xl">
-              <span>Stato Attuale</span>
-              <div className="flex items-center gap-2">
-                {renderStatusIcon()}
-                <Button variant="ghost" size="icon" onClick={handleLogout} title="Esci">
-                  <LogOut className="w-5 h-5 text-muted-foreground"/>
-                </Button>
-              </div>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <p className="text-xl font-bold text-primary">{status}</p>
-            {status === "Errore" && (
-              <p className="mt-2 text-sm text-destructive">{errorMessage}</p>
-            )}
-            {position && (
-              <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                <p>Velocità: {position.speed ? `${(position.speed * 3.6).toFixed(1)} km/h` : "N/D"}</p>
-                <p>Lat: {position.lat.toFixed(6)}, Lng: {position.lng.toFixed(6)}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="bg-card/80 backdrop-blur-sm">
-           <CardHeader className="p-4">
-             <CardTitle className="flex items-center justify-between text-xl">
-              <div className="flex items-center gap-2">
-                <Bell className="text-primary"/>
-                <span>Modalità Ricerca</span>
-              </div>
-            </CardTitle>
-           </CardHeader>
-           <CardContent className="p-4 pt-0">
-              <div className="flex items-center space-x-2">
-                <Switch id="searching-mode" checked={isSearching} onCheckedChange={handleSearchingChange} />
-                <Label htmlFor="searching-mode">Sto cercando parcheggio</Label>
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Attiva questa opzione per ricevere notifiche quando un parcheggio si libera vicino a te.
-              </p>
-           </CardContent>
-        </Card>
+      <div className="absolute top-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-80 flex flex-col items-end">
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          onClick={() => setIsPanelVisible(!isPanelVisible)} 
+          className="mb-2 bg-card/80 backdrop-blur-sm hover:bg-card"
+        >
+          {isPanelVisible ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+          <span className="sr-only">{isPanelVisible ? 'Nascondi pannello' : 'Mostra pannello'}</span>
+        </Button>
+      
+        {isPanelVisible && (
+          <div className="w-full flex flex-col gap-4 animate-in fade-in-0 duration-300">
+            <Card className="bg-card/80 backdrop-blur-sm">
+              <CardHeader className="p-4">
+                <CardTitle className="flex items-center justify-between text-lg">
+                  <span>Stato Attuale</span>
+                  <div className="flex items-center gap-2">
+                    {renderStatusIcon()}
+                    <Button variant="ghost" size="icon" onClick={handleLogout} title="Esci">
+                      <LogOut className="w-5 h-5 text-muted-foreground"/>
+                    </Button>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              {status === "Errore" && (
+                <CardContent className="p-4 pt-0">
+                  <p className="text-sm text-destructive">{errorMessage}</p>
+                </CardContent>
+              )}
+            </Card>
+
+            <Card className="bg-card/80 backdrop-blur-sm">
+               <CardHeader className="p-4">
+                 <CardTitle className="flex items-center justify-between text-lg">
+                  <div className="flex items-center gap-2">
+                    <Bell className="text-primary"/>
+                    <span>Modalità Ricerca</span>
+                  </div>
+                </CardTitle>
+               </CardHeader>
+               <CardContent className="p-4 pt-0">
+                  <div className="flex items-center space-x-2">
+                    <Switch id="searching-mode" checked={isSearching} onCheckedChange={handleSearchingChange} />
+                    <Label htmlFor="searching-mode">Sto cercando parcheggio</Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Attiva per ricevere notifiche quando un parcheggio si libera vicino a te.
+                  </p>
+               </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
     </main>
   );
