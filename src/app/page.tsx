@@ -31,11 +31,12 @@ type Status =
   | "Parcheggio salvato"
   | "Errore";
 
-const SPEED_THRESHOLD_KMH = 10; // km/h
+const SPEED_THRESHOLD_KMH = 5; // km/h
 const SPEED_THRESHOLD_MS = SPEED_THRESHOLD_KMH / 3.6; // m/s
 const STOP_DURATION_MS = 60 * 1000; // 60 seconds
 const DISTANCE_THRESHOLD_M = 50; // meters
 const NOTIFICATION_RADIUS_M = 1000; // 1 km
+const PARKING_EXPIRATION_MS = 5 * 60 * 1000; // 5 minutes
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
@@ -63,8 +64,15 @@ export default function Home() {
 
   const mapParkingSpots = useMemo(() => {
     if (isSearching && parkingsData) {
+      const now = new Date().getTime();
       return parkingsData
-        .filter((p) => p.status === "libero")
+        .filter((p) => {
+          if (p.status !== "libero" || !p.timestamp?.toDate) {
+            return false;
+          }
+          const parkingTime = p.timestamp.toDate().getTime();
+          return (now - parkingTime) < PARKING_EXPIRATION_MS;
+        })
         .map((p) => ({ id: p.id, lat: p.latitude, lng: p.longitude }));
     }
     return [];
